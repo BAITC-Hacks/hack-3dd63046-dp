@@ -31,6 +31,8 @@ const COMMAND_ALIASES = new Map([
   ['help', 'help'], ['помощь', 'help'], ['?', 'help'],
   ['topics', 'topics'], ['темы', 'topics'], ['список', 'topics'],
   ['stats', 'stats'], ['статистика', 'stats'],
+  ['examples', 'examples'], ['примеры', 'examples'],
+  ['why', 'why'], ['почему', 'why'],
   ['reload', 'reload'], ['перезагрузить', 'reload'],
   ['exit', 'exit'], ['quit', 'exit'], ['q', 'exit'], ['выход', 'exit'],
 ]);
@@ -107,6 +109,11 @@ function scoreQuestion(questionWords, faqWords) {
   return score;
 }
 
+function matchedWords(questionWords, faqWords) {
+  return [...questionWords].filter((word) =>
+    [...faqWords].some((faqWord) => wordsMatch(word, faqWord)));
+}
+
 function matchQuestion(userQuestion, faq) {
   const questionWords = keywords(userQuestion);
   let best = null;
@@ -124,7 +131,9 @@ function matchQuestion(userQuestion, faq) {
     }
   }
 
-  return best && !tied ? { entry: best, score: bestScore } : null;
+  return best && !tied
+    ? { entry: best, score: bestScore, words: matchedWords(questionWords, best.words) }
+    : null;
 }
 
 function findAnswer(userQuestion, faq) {
@@ -134,13 +143,41 @@ function findAnswer(userQuestion, faq) {
 function helpText() {
   return [
     'Задайте вопрос о репетиции — бот найдёт подходящую тему по ключевым словам.',
-    'Команды: /topics — вопросы; /stats — статистика; /reload — перечитать faq.txt; /exit — выйти.',
+    'Команды: /topics — вопросы; /examples — примеры; /why <вопрос> — объяснение ответа;',
+    '/stats — статистика; /reload — перечитать faq.txt; /exit — выйти.',
   ].join('\n');
 }
 
-function commandFromInput(input) {
+function parseCommand(input) {
   const value = normalize(input).replace(/^\//, '');
-  return COMMAND_ALIASES.get(value);
+  const [name, ...argument] = value.split(' ');
+  return { command: COMMAND_ALIASES.get(name), argument: argument.join(' ') };
+}
+
+function commandFromInput(input) {
+  return parseCommand(input).command;
+}
+
+function examplesText() {
+  return [
+    'Примеры вопросов:',
+    '— Во сколько начало?',
+    '— Кто участвует в команде?',
+    '— Какое направление выбрали?',
+    '— Когда защита прототипа?',
+    '— Будут награды?',
+  ].join('\n');
+}
+
+function explainMatch(userQuestion, faq) {
+  const match = matchQuestion(userQuestion, faq);
+  if (!match) return 'Не удалось уверенно выбрать тему: попробуйте сформулировать вопрос точнее.';
+
+  return [
+    `Подходящая тема: «${match.entry.question}».`,
+    `Совпавшие ключевые слова: ${match.words.join(', ')}.`,
+    `Оценка совпадения: ${match.score}.`,
+  ].join('\n');
 }
 
 function createState(filePath = FAQ_PATH) {
@@ -148,9 +185,13 @@ function createState(filePath = FAQ_PATH) {
 }
 
 function handleInput(input, state) {
-  const command = commandFromInput(input);
+  const { command, argument } = parseCommand(input);
   if (command === 'exit') return { message: 'До свидания!', exit: true };
   if (command === 'help') return { message: helpText() };
+  if (command === 'examples') return { message: examplesText() };
+  if (command === 'why') {
+    return { message: argument ? explainMatch(argument, state.faq) : 'Использование: /why <ваш вопрос>.' };
+  }
   if (command === 'topics') {
     return { message: state.faq.map((item, index) => `${index + 1}. ${item.question}`).join('\n') };
   }
@@ -191,6 +232,6 @@ function start() {
 if (require.main === module) start();
 
 module.exports = {
-  UNKNOWN, commandFromInput, createState, findAnswer, handleInput,
-  keywords, loadFaq, matchQuestion, normalize, parseFaq, wordsMatch,
+  UNKNOWN, commandFromInput, createState, examplesText, explainMatch, findAnswer,
+  handleInput, keywords, loadFaq, matchQuestion, normalize, parseCommand, parseFaq, wordsMatch,
 };

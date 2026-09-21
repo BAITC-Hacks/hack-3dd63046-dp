@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const {
-  UNKNOWN, createState, findAnswer, handleInput, loadFaq, matchQuestion, parseFaq,
+  UNKNOWN, createState, explainMatch, findAnswer, handleInput, loadFaq, matchQuestion, parseFaq,
 } = require('./bot');
 
 const faq = loadFaq(path.join(__dirname, 'faq.txt'));
@@ -21,6 +21,9 @@ assert.throws(() => parseFaq('time\tВопрос\tОтвет'), /ровно пя
 const state = createState(path.join(__dirname, 'faq.txt'));
 assert.match(handleInput('/help', state).message, /\/topics/);
 assert.match(handleInput('/topics', state).message, /1\. Когда проходит/);
+assert.match(handleInput('/examples', state).message, /Во сколько начало/);
+assert.match(handleInput('/why Во сколько начало?', state).message, /Совпавшие ключевые слова/);
+assert.match(explainMatch('Расскажите о квантовой физике', faq), /Не удалось уверенно/);
 assert.match(handleInput('Будут призы?', state).message, /Лучшие команды/);
 assert.equal(handleInput('Что с погодой?', state).message, UNKNOWN);
 assert.match(handleInput('/stats', state).message, /Вопросов: 2; найдено ответов: 1; «не знаю»: 1/);
