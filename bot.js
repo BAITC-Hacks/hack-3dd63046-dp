@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Консольный FAQ-бот для репетиции HackAlem AI.
- * Зависимости не нужны: достаточно Node.js 18+.
+ * Терминальный FAQ-бот для репетиции.
+ * Нужен только Node.js 18+: внешних зависимостей нет.
  */
 
 const fs = require('node:fs');
@@ -10,18 +10,37 @@ const path = require('node:path');
 const readline = require('node:readline');
 
 const FAQ_PATH = path.join(__dirname, 'faq.txt');
+const UNKNOWN = 'не знаю';
 const STOP_WORDS = new Set([
-  'а', 'в', 'во', 'вы', 'да', 'для', 'есть', 'за', 'и', 'из', 'как',
-  'ли', 'мне', 'мы', 'на', 'не', 'нужно', 'о', 'от', 'по', 'с', 'со', 'то',
-  'у', 'что', 'это', 'я', 'когда', 'какой', 'нужна', 'нужен',
+  'а', 'в', 'во', 'вы', 'да', 'для', 'есть', 'за', 'и', 'из', 'как', 'ли',
+  'мне', 'мы', 'на', 'не', 'о', 'от', 'по', 'с', 'со', 'то', 'у', 'что',
+  'это', 'я', 'когда', 'какой', 'какая', 'какие', 'нужен', 'нужна', 'нужно',
 ]);
-const STRONG_KEYWORDS = new Set(['где', 'куда', 'репозитор', 'readme', 'github']);
+
+// Основы слов и синонимы для каждой темы. Они хранятся отдельно от ответов,
+// поэтому faq.txt остаётся легко редактируемым файлом из пяти пар Q&A.
+const TOPIC_KEYWORDS = new Map([
+  ['time', ['врем', 'начал', 'час', 'суббот', 'прийт', 'расписан']],
+  ['team', ['команд', 'участ', 'разработ', 'дизайнер', 'менеджер', 'состав', 'кто']],
+  ['track', ['трек', 'направлен', 'дашборд', 'аналитик', 'данн']],
+  ['submission', ['сдач', 'сдат', 'дедлайн', 'защит', 'демо', 'жюри', 'прототип', 'финал']],
+  ['prizes', ['приз', 'наград', 'победител', 'выигр', 'эксперт']],
+]);
+
+const COMMAND_ALIASES = new Map([
+  ['help', 'help'], ['помощь', 'help'], ['?', 'help'],
+  ['topics', 'topics'], ['темы', 'topics'], ['список', 'topics'],
+  ['stats', 'stats'], ['статистика', 'stats'],
+  ['reload', 'reload'], ['перезагрузить', 'reload'],
+  ['exit', 'exit'], ['quit', 'exit'], ['q', 'exit'], ['выход', 'exit'],
+]);
 
 function normalize(text) {
   return text
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .replace(/[^a-zа-я0-9\s]/gi, ' ')
+    .replace(/[^a-zа-я0-9\s/?-]/gi, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -33,84 +52,145 @@ function keywords(text) {
   );
 }
 
-// Синонимы и основы слов для пяти вопросов. Ключи привязаны к тексту вопроса,
-// поэтому порядок строк в faq.txt не важен.
-const TOPIC_KEYWORDS = new Map([
-  [normalize('Когда нужно сдать решение?'), ['срок', 'дедлайн', 'врем', 'окончан', 'заканч', 'сдач', 'сдава']],
-  [normalize('Кто сдаёт решение?'), ['команд', 'участ', 'состав']],
-  [normalize('Какой выбран трек?'), ['трек', 'llm', 'приложен']],
-  [normalize('Куда загружать решение?'), ['где', 'куда', 'загруз', 'отправ', 'репозитор', 'readme', 'github']],
-  [normalize('Есть ли призы за репетицию?'), ['приз', 'наград', 'выигр']],
-]);
+function parseFaq(content) {
+  const entries = [];
+  const seenIds = new Set();
+
+  for (const [index, rawLine] of content.split(/\r?\n/).entries()) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const parts = line.split('\t');
+    if (parts.length !== 3) {
+      throw new Error(`Строка ${index + 1}: нужны ID, вопрос и ответ, разделённые табуляцией.`);
+    }
+
+    const [id, question, answer] = parts.map((part) => part.trim());
+    if (!TOPIC_KEYWORDS.has(id)) {
+      throw new Error(`Строка ${index + 1}: неизвестная тема «${id}».`);
+    }
+    if (!question || !answer || seenIds.has(id)) {
+      throw new Error(`Строка ${index + 1}: тема, вопрос и ответ должны быть уникальными и непустыми.`);
+    }
+
+    seenIds.add(id);
+    entries.push({ id, question, answer, words: new Set([...keywords(question), ...TOPIC_KEYWORDS.get(id)]) });
+  }
+
+  if (entries.length !== 5) {
+    throw new Error('faq.txt должен содержать ровно пять тем.');
+  }
+  return entries;
+}
 
 function loadFaq(filePath = FAQ_PATH) {
-  const rows = fs.readFileSync(filePath, 'utf8').trim().split(/\r?\n/);
-  return rows.map((row, index) => {
-    const [question, answer] = row.split('\t');
-    if (!question || !answer) {
-      throw new Error(`Строка ${index + 1} в faq.txt должна содержать вопрос и ответ через табуляцию.`);
-    }
-    const extraWords = TOPIC_KEYWORDS.get(normalize(question)) ?? [];
-    return { question, answer, words: new Set([...keywords(question), ...extraWords]) };
-  });
+  return parseFaq(fs.readFileSync(filePath, 'utf8'));
 }
 
 function wordsMatch(first, second) {
   if (first === second) return true;
-  const length = Math.min(first.length, second.length);
-  return length >= 4 && (first.startsWith(second) || second.startsWith(first));
+  const commonLength = Math.min(first.length, second.length);
+  return commonLength >= 4 && (first.startsWith(second) || second.startsWith(first));
 }
 
-function score(questionWords, faqWords) {
-  let matches = 0;
+function scoreQuestion(questionWords, faqWords) {
+  let score = 0;
   for (const word of questionWords) {
-    if ([...faqWords].some((faqWord) => wordsMatch(word, faqWord))) {
-      matches += STRONG_KEYWORDS.has(word) ? 3 : 1;
+    for (const faqWord of faqWords) {
+      if (wordsMatch(word, faqWord)) {
+        // Точное совпадение надёжнее совпадения только по основе слова.
+        score += word === faqWord ? 3 : 2;
+        break;
+      }
     }
   }
-  return matches;
+  return score;
+}
+
+function matchQuestion(userQuestion, faq) {
+  const questionWords = keywords(userQuestion);
+  let best = null;
+  let bestScore = 0;
+  let tied = false;
+
+  for (const entry of faq) {
+    const currentScore = scoreQuestion(questionWords, entry.words);
+    if (currentScore > bestScore) {
+      best = entry;
+      bestScore = currentScore;
+      tied = false;
+    } else if (currentScore > 0 && currentScore === bestScore) {
+      tied = true;
+    }
+  }
+
+  return best && !tied ? { entry: best, score: bestScore } : null;
 }
 
 function findAnswer(userQuestion, faq) {
-  const userWords = keywords(userQuestion);
-  let best = null;
-  let bestScore = 0;
-  let isTie = false;
+  return matchQuestion(userQuestion, faq)?.entry.answer ?? UNKNOWN;
+}
 
-  for (const item of faq) {
-    const currentScore = score(userWords, item.words);
-    if (currentScore > bestScore) {
-      best = item;
-      bestScore = currentScore;
-      isTie = false;
-    } else if (currentScore > 0 && currentScore === bestScore) {
-      isTie = true;
+function helpText() {
+  return [
+    'Задайте вопрос о репетиции — бот найдёт подходящую тему по ключевым словам.',
+    'Команды: /topics — вопросы; /stats — статистика; /reload — перечитать faq.txt; /exit — выйти.',
+  ].join('\n');
+}
+
+function commandFromInput(input) {
+  const value = normalize(input).replace(/^\//, '');
+  return COMMAND_ALIASES.get(value);
+}
+
+function createState(filePath = FAQ_PATH) {
+  return { filePath, faq: loadFaq(filePath), stats: { total: 0, known: 0, unknown: 0 } };
+}
+
+function handleInput(input, state) {
+  const command = commandFromInput(input);
+  if (command === 'exit') return { message: 'До свидания!', exit: true };
+  if (command === 'help') return { message: helpText() };
+  if (command === 'topics') {
+    return { message: state.faq.map((item, index) => `${index + 1}. ${item.question}`).join('\n') };
+  }
+  if (command === 'stats') {
+    const { total, known, unknown } = state.stats;
+    return { message: `Вопросов: ${total}; найдено ответов: ${known}; «не знаю»: ${unknown}.` };
+  }
+  if (command === 'reload') {
+    try {
+      state.faq = loadFaq(state.filePath);
+      return { message: `FAQ обновлён: ${state.faq.length} тем.` };
+    } catch (error) {
+      return { message: `Не удалось обновить FAQ: ${error.message}` };
     }
   }
 
-  return best && !isTie ? best.answer : 'не знаю';
+  const answer = findAnswer(input, state.faq);
+  state.stats.total += 1;
+  if (answer === UNKNOWN) state.stats.unknown += 1;
+  else state.stats.known += 1;
+  return { message: answer };
 }
 
 function start() {
-  const faq = loadFaq();
+  const state = createState();
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-  console.log('FAQ-бот репетиции HackAlem AI');
-  console.log('Задайте вопрос. Для выхода введите «выход».');
-
+  console.log('FAQ-бот репетиции. Введите вопрос или /help для списка команд.');
   const ask = () => rl.question('> ', (input) => {
-    if (normalize(input) === 'выход') {
-      rl.close();
-      return;
-    }
-
-    console.log(findAnswer(input, faq));
-    ask();
+    const result = handleInput(input, state);
+    console.log(result.message);
+    if (result.exit) rl.close();
+    else ask();
   });
-
   ask();
 }
 
 if (require.main === module) start();
 
-module.exports = { findAnswer, keywords, loadFaq, normalize, wordsMatch };
+module.exports = {
+  UNKNOWN, commandFromInput, createState, findAnswer, handleInput,
+  keywords, loadFaq, matchQuestion, normalize, parseFaq, wordsMatch,
+};
